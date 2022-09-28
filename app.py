@@ -143,4 +143,4 @@ def average():
     return {"error": "Request must be JSON"}, 415
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)
