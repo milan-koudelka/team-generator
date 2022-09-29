@@ -11,7 +11,7 @@ app = Flask(__name__)
 def landingpage():
     return '''
 <h1>Team generator</h1>
-<p>This app allows you to split list of players to two teams by different algorithms. The app is written as Python REST API based on Flask.</p>
+<p>This REST API allows you to split list of players to two teams by different algorithms. The app is written as Python REST API based on Flask.</p>
 
 <h2>REST API</h2>
 Send the request with the list of players to the REST API and retrieve the JSON with players split into two teams.
