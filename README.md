@@ -1,5 +1,5 @@
 <h1>Team generator</h1>
-<p>This app allows you to split list of players to two teams by different algorithms. The app is written as Python REST API based on Flask.</p>
+<p>This REST API allows you to split list of players to two teams by different algorithms. The app is written as Python REST API based on Flask.</p>
 
 <p>To use the app you need to start a Docker container.</p>
 <pre>docker run -d -p 5000:5000 docker.io/koudisek/teamgenerator</pre>
