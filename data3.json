@@ -4,17 +4,20 @@
        "1":
            { 
                "skill":25,
-               "sigma":8.333
+               "sigma":8.333,
+               "male":0
            },
        "2":
            { 
                "skill":20,
-               "sigma":8.333
+               "sigma":8.333,
+               "male":0
            },
        "3":
            { 
                "skill":10,
-               "sigma":8.333
+               "sigma":8.333,
+               "male":0
            }
      }
 }
