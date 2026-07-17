@@ -80,6 +80,9 @@ python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt
 venv/bin/ruff check . && venv/bin/ruff format --check .   # linter
 venv/bin/pytest                                           # unit + integration tests
 </pre>
-<p>CI (GitLab) runs ruff and pytest on every push, SAST, and on
-<code>master</code> builds and pushes the multi-arch Docker image. The
+<p>CI (GitHub Actions, <code>.github/workflows/ci.yml</code>) runs ruff and
+pytest on every push and pull request; a push to <code>master</code>
+additionally builds and publishes the multi-arch (amd64+arm64) Docker image to
+Docker Hub. Publishing needs the repo secrets
+<code>DOCKERHUB_USERNAME</code> and <code>DOCKERHUB_TOKEN</code>. The
 container runs gunicorn as an unprivileged user.</p>
