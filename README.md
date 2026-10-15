@@ -34,6 +34,10 @@ and is <strong>disabled by default</strong>. With an odd number of females one
 team has exactly one more; with a single female she simply lands in one of the
 teams; with zero females the flag changes nothing.</p>
 
+<h3>Order of the players</h3>
+<p>In every response each team lists its players <strong>strongest first</strong>
+(by OpenSkill ordinal, equal ones by id), and the JSON keeps that order.</p>
+
 <h3>Which team is A, and splits already played</h3>
 <p>The service keeps no state, so the caller sends what it knows. All of these
 fields are optional and work with every endpoint (<code>/rand</code>,
@@ -41,9 +45,9 @@ fields are optional and work with every endpoint (<code>/rand</code>,
 <ul>
 <li><code>"facilitator": "id"</code> &mdash; the person running the draw. If they
 are playing they are in <code>team_a</code>, so they always know which side is
-theirs. Without it (or if they are not playing) the team holding the smallest
-player id is A, so the labels never depend on the order the players were sent
-in.</li>
+theirs. Without it (or if they are not playing) the team holding the
+strongest player is A (equally strong players are told apart by id), so the
+labels never depend on the order the players were sent in.</li>
 <li><code>"played": [{"team_a": [ids], "team_b": [ids]}, ...]</code> &mdash; splits
 already played, <strong>oldest first</strong>. <code>/avg</code>,
 <code>/topdown</code> and <code>/rand</code> avoid them while any other split

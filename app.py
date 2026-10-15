@@ -13,6 +13,10 @@ app = Flask(__name__)
 # Reject oversized request bodies outright (Flask answers 413).
 app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
+# Keep the order players are built in: each team is listed strongest first, and
+# Flask would otherwise sort the JSON keys alphabetically.
+app.json.sort_keys = False
+
 # /avg tries every combination — C(n, n/2) grows so fast that 24 players
 # (~2.7M splits, a few seconds) is a sane ceiling; 30+ would run for minutes
 # and wedge the worker.
@@ -151,14 +155,19 @@ def _parse_hints():
     )
 
 
-def _orient(team_a, team_b, hints):
+def _by_skill(ids, players):
+    """Player ids strongest first (ties by id, so the order is stable)."""
+    return sorted(ids, key=lambda pid: (-_ordinal(players[pid]), pid))
+
+
+def _orient(team_a, team_b, players, hints):
     """Decide which side is shown as team A, so the labels never jump around:
 
     1. the same split as the one played last (the end of hints.played) keeps
        that split's sides;
     2. otherwise the side with the facilitator is A;
-    3. otherwise the side holding the smallest player id is A, so the result
-       does not depend on the order players were sent in.
+    3. otherwise the side holding the strongest player is A (ties by id), so
+       the result does not depend on the order players were sent in.
     """
     a_set, b_set = set(team_a), set(team_b)
     if hints.last_split is not None:
@@ -171,7 +180,7 @@ def _orient(team_a, team_b, hints):
         return list(team_b), list(team_a)
     if hints.facilitator in a_set:
         return list(team_a), list(team_b)
-    if min(a_set | b_set) in a_set:
+    if _by_skill(a_set | b_set, players)[0] in a_set:
         return list(team_a), list(team_b)
     return list(team_b), list(team_a)
 
@@ -219,9 +228,10 @@ def _assign_balanced(ids_desc, a, b, players):
 
 
 def _teams_dict(a_ids, b_ids, players):
+    """Both teams as {id: player}, each listed strongest first."""
     return {
-        "team_a": {pid: players[pid] for pid in a_ids},
-        "team_b": {pid: players[pid] for pid in b_ids},
+        "team_a": {pid: players[pid] for pid in _by_skill(a_ids, players)},
+        "team_b": {pid: players[pid] for pid in _by_skill(b_ids, players)},
     }
 
 
@@ -372,7 +382,7 @@ def _best_unplayed(players, balance_females, hints, shuffle_ties):
 def _respond(method, team_a, team_b, players, hints, *, with_stats, repeat_avoided=False):
     """The response of a draw: the teams, which method produced them, and what
     happened about splits already played."""
-    team_a, team_b = _orient(team_a, team_b, hints)
+    team_a, team_b = _orient(team_a, team_b, players, hints)
     output = _teams_dict(team_a, team_b, players)
     output["method"] = method
     output["already_played"] = _split_key(team_a, team_b) in hints.played_keys
@@ -456,6 +466,9 @@ is disabled by default.</p>
 first, the best <code>limit</code> of them (default {DEFAULT_COMBINATIONS_LIMIT},
 max {MAX_COMBINATIONS_LIMIT}; max {MAX_AVG_PLAYERS} players)</li>
 </ul>
+
+<h3>Order</h3>
+<p>Each team is listed strongest player first (by ordinal, equal ones by id).</p>
 
 <h3>Optional context</h3>
 <p>Every endpoint also accepts <code>facilitator</code> (the person running the
@@ -580,7 +593,7 @@ def avg_all():
     ranked, total = _ranked_splits(players, balance_females, limit)
     combos = []
     for team_a, team_b in ranked:
-        team_a, team_b = _orient(team_a, team_b, hints)
+        team_a, team_b = _orient(team_a, team_b, players, hints)
         combos.append(
             {
                 **_teams_dict(team_a, team_b, players),

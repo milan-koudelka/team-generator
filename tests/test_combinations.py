@@ -3,7 +3,7 @@ is shown in team A, the split played last, and the splits already played."""
 
 import pytest
 
-from app import MAX_AVG_PLAYERS, _random_split, _ranked_splits, app
+from app import MAX_AVG_PLAYERS, Hints, _orient, _random_split, _ranked_splits, app
 
 
 @pytest.fixture()
@@ -145,11 +145,37 @@ class TestTeamA:
             assert player in out["team_a"]
 
     @pytest.mark.parametrize("endpoint", ["/topdown", "/avg"])
-    def test_without_a_request_the_smallest_id_is_in_team_a(self, client, endpoint):
+    def test_without_a_request_the_side_with_the_strongest_player_is_team_a(self, client, endpoint):
         players = make_players(6)
         for ids in (list(players), list(reversed(list(players)))):
             out = post(client, endpoint, {pid: players[pid] for pid in ids})
             assert "p0" in out["team_a"]
+
+    def test_the_strongest_player_decides_not_the_smallest_id(self):
+        # "a" has the smallest id but is the weakest, "d" is the strongest.
+        players = {
+            "a": {"mu": 10, "sigma": 0.001},
+            "b": {"mu": 20, "sigma": 0.001},
+            "c": {"mu": 30, "sigma": 0.001},
+            "d": {"mu": 40, "sigma": 0.001},
+        }
+
+        team_a, team_b = _orient(["a", "b"], ["c", "d"], players, Hints())
+
+        assert team_a == ["c", "d"] and team_b == ["a", "b"]
+
+    def test_equally_strong_players_are_told_apart_by_id(self, client):
+        players = {pid: {"mu": 25, "sigma": 5} for pid in ("b", "a", "d", "c")}
+
+        out = post(client, "/avg", players)
+
+        assert "a" in out["team_a"]
+
+    def test_the_facilitator_wins_over_the_strongest_player(self, client):
+        # p0 is the strongest, but p1 is running the draw and is not on p0's side.
+        out = post(client, "/avg", make_players(4), facilitator="p1")
+
+        assert "p1" in out["team_a"] and "p0" in out["team_b"]
 
     def test_a_player_who_is_not_playing_changes_nothing(self, client):
         out = post(client, "/avg", make_players(4), facilitator="somebody-else")
@@ -377,3 +403,55 @@ class TestEngine:
         players = {c: {"mu": 25.0, "sigma": 5.0, "male": 1} for c in "ab"}
 
         assert k(*_random_split(players, False, avoid={k("a", "b")})) == k("a", "b")
+
+
+class TestPlayerOrder:
+    """Each team lists its players strongest first, in the JSON as sent."""
+
+    PLAYERS = {
+        "zeta": {"mu": 35, "sigma": 0.001},
+        "bob": {"mu": 55, "sigma": 0.001},
+        "mike": {"mu": 45, "sigma": 0.001},
+        "adam": {"mu": 30, "sigma": 0.001},
+        "carl": {"mu": 50, "sigma": 0.001},
+        "yuri": {"mu": 40, "sigma": 0.001},
+    }
+    STRONGEST_FIRST = ["bob", "carl", "mike", "yuri", "zeta", "adam"]
+
+    def listed(self, team):
+        """Players of a team in the order they appear in the response."""
+        return list(team)
+
+    @pytest.mark.parametrize("endpoint", ["/rand", "/topdown", "/avg"])
+    def test_a_draw_lists_each_team_strongest_first(self, client, endpoint):
+        out = post(client, endpoint, self.PLAYERS)
+
+        for team in (out["team_a"], out["team_b"]):
+            ranks = [self.STRONGEST_FIRST.index(pid) for pid in self.listed(team)]
+            assert ranks == sorted(ranks)
+
+    def test_every_combination_lists_each_team_strongest_first(self, client):
+        out = post(client, "/avg-all", self.PLAYERS, limit=10)
+
+        for combo in out["combinations"]:
+            for team in (combo["team_a"], combo["team_b"]):
+                ranks = [self.STRONGEST_FIRST.index(pid) for pid in self.listed(team)]
+                assert ranks == sorted(ranks)
+
+    def test_the_order_survives_the_wire_instead_of_being_sorted_by_id(self, client):
+        resp = client.post("/avg", json={"players": self.PLAYERS})
+        raw = resp.get_data(as_text=True)
+
+        # Alphabetical keys would put "adam" before "bob" and "carl" in the text.
+        positions = {pid: raw.index(f'"{pid}"') for pid in self.PLAYERS}
+        team_a = resp.get_json()["team_a"]
+        in_a = [pid for pid in team_a]
+        assert [positions[pid] for pid in in_a] == sorted(positions[pid] for pid in in_a)
+
+    def test_ties_are_listed_by_id(self, client):
+        players = {pid: {"mu": 25, "sigma": 5} for pid in ("d", "b", "c", "a")}
+
+        out = post(client, "/avg", players)
+
+        for team in (out["team_a"], out["team_b"]):
+            assert list(team) == sorted(team)
