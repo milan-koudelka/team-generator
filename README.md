@@ -37,7 +37,7 @@ teams; with zero females the flag changes nothing.</p>
 <h3>Which team is A, and splits already played</h3>
 <p>The service keeps no state, so the caller sends what it knows. All of these
 fields are optional and work with every endpoint (<code>/rand</code>,
-<code>/topdown</code>, <code>/avg</code> and <code>/combinations</code>):</p>
+<code>/topdown</code>, <code>/avg</code> and <code>/avg-all</code>):</p>
 <ul>
 <li><code>"team_a_player": "id"</code> &mdash; this player (if playing) is in
 <code>team_a</code>. Without it the team holding the smallest player id is A,
@@ -45,7 +45,7 @@ so the labels never depend on the order the players were sent in.</li>
 <li><code>"played": [{"team_a": [ids], "team_b": [ids]}, ...]</code> &mdash; splits
 already played, <strong>oldest first</strong>. <code>/avg</code>,
 <code>/topdown</code> and <code>/rand</code> avoid them while any other split
-exists (see below) and <code>/combinations</code> flags them. Which side is
+exists (see below) and <code>/avg-all</code> flags them. Which side is
 called A does not matter for that. It matters for the <em>last</em> entry, the
 split played last: if a result is that same split it keeps those sides,
 whatever <code>team_a_player</code> says, so a continued match never swaps
@@ -103,12 +103,16 @@ rand/topdown have no cap.</li>
 <li>rand - split players into teams randomly</li>
 <li>topdown - snake draft by OpenSkill ordinal</li>
 <li>avg - balance the two teams by average OpenSkill ordinal</li>
-<li>combinations - every way to split the players, most balanced first</li>
+<li>avg-all - like avg, but lists every way to split the players, most balanced first (<code>avg</code> is its first entry)</li>
 </ul>
 
-<h4>/combinations</h4>
-<p>Returns <code>{"total": N, "combinations": [...]}</code>: the <code>limit</code>
-most balanced splits (default 20, 1 to 200; <code>total</code> is how many
+<h4>/avg-all</h4>
+<p>The same ranking <code>/avg</code> uses, but instead of the single best split
+it returns the list. With <code>limit</code> 1 and no <code>played</code> it is
+the split <code>/avg</code> returns. Unlike <code>/avg</code> it never skips
+played splits, it only flags them. Returns
+<code>{"total": N, "combinations": [...]}</code>: the <code>limit</code> most
+balanced splits (default 20, 1 to 200; <code>total</code> is how many
 there are in all, for 12 players 462). Each item has <code>team_a</code> and
 <code>team_b</code> like the other endpoints, the same figures <code>/avg</code>
 reports (<code>avg_player_ordinal_difference</code>, females and so on) and
@@ -120,7 +124,7 @@ reports (<code>avg_player_ordinal_difference</code>, females and so on) and
 curl --json "$(cat data3.json)" http://127.0.0.1:5000/rand | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/topdown | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/avg | jq
-curl --json "$(cat data12.json)" http://127.0.0.1:5000/combinations | jq
+curl --json "$(cat data12.json)" http://127.0.0.1:5000/avg-all | jq
 </pre>
 
 <h2>Development</h2>

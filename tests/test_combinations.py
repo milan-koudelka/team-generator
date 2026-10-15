@@ -1,4 +1,4 @@
-"""/combinations, plus the optional context every endpoint accepts: which player
+"""/avg-all, plus the optional context every endpoint accepts: which player
 is shown in team A, the split played last, and the splits already played."""
 
 import pytest
@@ -46,7 +46,7 @@ THIRD = k({"p0", "p1"}, {"p2", "p3"})  # 29.5 against 27.5, the widest gap
 
 class TestCombinations:
     def test_lists_every_split_once_best_first(self, client):
-        out = post(client, "/combinations", make_players(4))
+        out = post(client, "/avg-all", make_players(4))
 
         assert out["total"] == 3
         keys = [key(c) for c in out["combinations"]]
@@ -56,7 +56,7 @@ class TestCombinations:
         assert diffs[0] == pytest.approx(0, abs=1e-2)
 
     def test_each_combination_carries_both_teams_and_the_stats(self, client):
-        combo = post(client, "/combinations", make_players(4, males=("p0",)))["combinations"][0]
+        combo = post(client, "/avg-all", make_players(4, males=("p0",)))["combinations"][0]
 
         assert set(combo["team_a"]) | set(combo["team_b"]) == {"p0", "p1", "p2", "p3"}
         assert combo["team_a"]["p0"]["mu"] == 30  # player data comes back like /avg
@@ -66,33 +66,33 @@ class TestCombinations:
     def test_the_best_one_is_what_avg_returns(self, client):
         players = make_players(6)
 
-        best = post(client, "/combinations", players)["combinations"][0]
+        best = post(client, "/avg-all", players)["combinations"][0]
         avg = post(client, "/avg", players)
 
         assert key(best) == key(avg)
         assert best["avg_player_ordinal_difference"] == avg["avg_player_ordinal_difference"]
 
     def test_limit_caps_the_list_not_the_total(self, client):
-        out = post(client, "/combinations", make_players(6), limit=4)
+        out = post(client, "/avg-all", make_players(6), limit=4)
 
         assert len(out["combinations"]) == 4
         assert out["total"] == 10  # C(6, 3) / 2
 
     def test_the_default_limit_is_twenty(self, client):
-        out = post(client, "/combinations", make_players(8))
+        out = post(client, "/avg-all", make_players(8))
 
         assert len(out["combinations"]) == 20
         assert out["total"] == 35  # C(8, 4) / 2
 
     def test_an_odd_count_has_the_smaller_team_first(self, client):
-        out = post(client, "/combinations", make_players(5), limit=50)
+        out = post(client, "/avg-all", make_players(5), limit=50)
 
         assert out["total"] == 10
         assert all(len(c["team_a"]) + len(c["team_b"]) == 5 for c in out["combinations"])
 
     def test_balance_females_drops_splits_with_a_gap_of_two_or_more(self, client):
         players = make_players(4, males=("p2", "p3"))  # p0, p1 are women
-        out = post(client, "/combinations", players, balance_females=True)
+        out = post(client, "/avg-all", players, balance_females=True)
 
         assert out["total"] == 2
         assert all(c["female_difference"] == 0 for c in out["combinations"])
@@ -102,8 +102,8 @@ class TestCombinations:
         players = make_players(6)
         reversed_players = dict(reversed(list(players.items())))
 
-        one = post(client, "/combinations", players)
-        two = post(client, "/combinations", reversed_players)
+        one = post(client, "/avg-all", players)
+        two = post(client, "/avg-all", reversed_players)
 
         assert [c["team_a"].keys() for c in one["combinations"]] == [
             c["team_a"].keys() for c in two["combinations"]
@@ -112,7 +112,7 @@ class TestCombinations:
     def test_flags_the_splits_already_played(self, client):
         out = post(
             client,
-            "/combinations",
+            "/avg-all",
             make_players(4),
             played=[split({"p3", "p0"}, {"p1", "p2"})],
         )
@@ -120,21 +120,21 @@ class TestCombinations:
         assert [c["already_played"] for c in out["combinations"]] == [True, False, False]
 
     def test_puts_the_requested_player_in_team_a_of_every_combination(self, client):
-        out = post(client, "/combinations", make_players(6), team_a_player="p4", limit=50)
+        out = post(client, "/avg-all", make_players(6), team_a_player="p4", limit=50)
 
         assert all("p4" in c["team_a"] for c in out["combinations"])
 
     def test_refuses_too_many_players(self, client):
-        out = post(client, "/combinations", make_players(MAX_AVG_PLAYERS + 1), status=400)
+        out = post(client, "/avg-all", make_players(MAX_AVG_PLAYERS + 1), status=400)
 
         assert "at most 24" in out["error"]
 
     @pytest.mark.parametrize("limit", [0, -1, 201, "5", 2.5, True, None])
     def test_refuses_a_bad_limit(self, client, limit):
-        post(client, "/combinations", make_players(4), status=400, limit=limit)
+        post(client, "/avg-all", make_players(4), status=400, limit=limit)
 
     def test_needs_two_players(self, client):
-        post(client, "/combinations", make_players(1), status=400)
+        post(client, "/avg-all", make_players(1), status=400)
 
 
 class TestTeamA:
@@ -162,7 +162,7 @@ class TestTeamA:
 
         out = post(
             client,
-            "/combinations",
+            "/avg-all",
             make_players(4),
             team_a_player="p0",  # would be in A otherwise
             played=played,
@@ -177,7 +177,7 @@ class TestTeamA:
     def test_only_the_last_entry_of_played_decides_the_sides(self, client):
         played = [split({"p1", "p2"}, {"p0", "p3"}), split({"p0", "p3"}, {"p1", "p2"})]
 
-        out = post(client, "/combinations", make_players(4), team_a_player="p1", played=played)
+        out = post(client, "/avg-all", make_players(4), team_a_player="p1", played=played)
 
         assert set(out["combinations"][0]["team_a"]) == {"p0", "p3"}
 
@@ -319,7 +319,7 @@ class TestAvoidingPlayedSplits:
 
 
 class TestValidation:
-    @pytest.mark.parametrize("endpoint", ["/rand", "/topdown", "/avg", "/combinations"])
+    @pytest.mark.parametrize("endpoint", ["/rand", "/topdown", "/avg", "/avg-all"])
     @pytest.mark.parametrize(
         "extra",
         [

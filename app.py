@@ -22,7 +22,7 @@ MAX_AVG_PLAYERS = 24
 # split that was already played.
 RAND_REDRAWS = 30
 
-# /combinations returns the best `limit` splits.
+# /avg-all returns the best `limit` splits.
 DEFAULT_COMBINATIONS_LIMIT = 20
 MAX_COMBINATIONS_LIMIT = 200
 
@@ -451,9 +451,9 @@ is disabled by default.</p>
 <li>rand - split players into teams randomly</li>
 <li>topdown - snake draft by OpenSkill ordinal</li>
 <li>avg - balance the two teams by average OpenSkill ordinal (max {MAX_AVG_PLAYERS} players)</li>
-<li>combinations - every way to split the players, most balanced first, best
-<code>limit</code> of them (default {DEFAULT_COMBINATIONS_LIMIT}, max {MAX_COMBINATIONS_LIMIT};
-max {MAX_AVG_PLAYERS} players)</li>
+<li>avg-all - like avg, but lists every way to split the players, most balanced
+first, the best <code>limit</code> of them (default {DEFAULT_COMBINATIONS_LIMIT},
+max {MAX_COMBINATIONS_LIMIT}; max {MAX_AVG_PLAYERS} players)</li>
 </ul>
 
 <h3>Optional context</h3>
@@ -469,7 +469,7 @@ say what happened in <code>method</code>, <code>already_played</code> and
 curl --json "$(cat data3.json)" http://127.0.0.1:5000/rand | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/topdown | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/avg | jq
-curl --json "$(cat data12.json)" http://127.0.0.1:5000/combinations | jq
+curl --json "$(cat data12.json)" http://127.0.0.1:5000/avg-all | jq
 </pre>
 """
 
@@ -561,9 +561,9 @@ def avg():
     )
 
 
-@app.post("/combinations")
-# every way to split the players, most balanced first
-def all_combinations():
+@app.post("/avg-all")
+# like /avg, but every way to split the players, most balanced first
+def avg_all():
     players, balance_females = _parse_request()
     hints = _parse_hints()
     _check_enumerable(players)
