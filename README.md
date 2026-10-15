@@ -34,6 +34,47 @@ and is <strong>disabled by default</strong>. With an odd number of females one
 team has exactly one more; with a single female she simply lands in one of the
 teams; with zero females the flag changes nothing.</p>
 
+<h3>Order of the players</h3>
+<p>In every response each team lists its players <strong>strongest first</strong>
+(by OpenSkill ordinal, equal ones by id), and the JSON keeps that order.</p>
+
+<h3>Which team is A, and splits already played</h3>
+<p>The service keeps no state, so the caller sends what it knows. All of these
+fields are optional and work with every endpoint (<code>/rand</code>,
+<code>/topdown</code>, <code>/avg</code> and <code>/avg-all</code>):</p>
+<ul>
+<li><code>"facilitator": "id"</code> &mdash; the person running the draw. If they
+are playing they are in <code>team_a</code>, so they always know which side is
+theirs. Without it (or if they are not playing) the team holding the
+strongest player is A (equally strong players are told apart by id), so the
+labels never depend on the order the players were sent in.</li>
+<li><code>"played": [{"team_a": [ids], "team_b": [ids]}, ...]</code> &mdash; splits
+already played, <strong>oldest first</strong>. <code>/avg</code>,
+<code>/topdown</code> and <code>/rand</code> avoid them while any other split
+exists (see below) and <code>/avg-all</code> flags them. Which side is
+called A does not matter for that. It matters for the <em>last</em> entry, the
+split played last: if a result is that same split it keeps those sides,
+whatever <code>facilitator</code> says, so a continued match never swaps
+teams.</li>
+</ul>
+<p>Draw responses (<code>/rand</code>, <code>/topdown</code>, <code>/avg</code>)
+also carry <code>method</code> (what actually produced the teams),
+<code>already_played</code> and <code>repeat_avoided</code>. With a
+<code>played</code> list a draw behaves like this:</p>
+<ul>
+<li>The split is not played yet: returned as usual.</li>
+<li><code>/rand</code> lands on a played split: it draws again (up to 30 times).</li>
+<li>Otherwise the most balanced unplayed split is returned, with
+<code>"method": "avg"</code> and <code>"repeat_avoided": true</code> (for
+<code>/avg</code> the method stays <code>avg</code>).</li>
+<li>Every split has been played (easy with few players): a random one is
+returned, but not the last entry of <code>played</code> unless it is the only one, with
+<code>"method": "rand"</code> and <code>"already_played": true</code>.</li>
+<li>More than 24 players cannot be enumerated: a played <code>/topdown</code> or
+<code>/rand</code> result is returned as it is, with
+<code>"already_played": true</code>.</li>
+</ul>
+
 <h3>Validation &amp; limits</h3>
 <ul>
 <li>At least 2 players are required; any malformed input (missing
@@ -41,8 +82,11 @@ teams; with zero females the flag changes nothing.</p>
 <code>male</code> outside 0/1, non-boolean <code>balance_females</code>)
 is answered with <strong>HTTP 400</strong> and a JSON
 <code>{"error": "..."}</code> body.</li>
-<li><code>avg</code> tries every combination, so it accepts at most
-<strong>24 players</strong> (400 above that); rand/topdown have no cap.</li>
+<li><code>avg</code> and <code>combinations</code> try every combination, so
+they accept at most <strong>24 players</strong> (400 above that);
+rand/topdown have no cap.</li>
+<li><code>facilitator</code>, <code>played</code> and
+<code>limit</code> are validated too (400 if malformed).</li>
 <li>Request bodies over 1&nbsp;MB are rejected with 413.</li>
 <li>Successful responses are <code>application/json</code>, HTTP 200.</li>
 </ul>
@@ -65,13 +109,28 @@ is answered with <strong>HTTP 400</strong> and a JSON
 <li>rand - split players into teams randomly</li>
 <li>topdown - snake draft by OpenSkill ordinal</li>
 <li>avg - balance the two teams by average OpenSkill ordinal</li>
+<li>avg-all - like avg, but lists every way to split the players, most balanced first (<code>avg</code> is its first entry)</li>
 </ul>
+
+<h4>/avg-all</h4>
+<p>The same ranking <code>/avg</code> uses, but instead of the single best split
+it returns the list. With <code>limit</code> 1 and no <code>played</code> it is
+the split <code>/avg</code> returns. Unlike <code>/avg</code> it never skips
+played splits, it only flags them. Returns
+<code>{"total": N, "combinations": [...]}</code>: the <code>limit</code> most
+balanced splits (default 20, 1 to 200; <code>total</code> is how many
+there are in all, for 12 players 462). Each item has <code>team_a</code> and
+<code>team_b</code> like the other endpoints, the same figures <code>/avg</code>
+reports (<code>avg_player_ordinal_difference</code>, females and so on) and
+<code>already_played</code>. Every split is listed once, with
+<code>balance_females</code> honoured as in <code>/avg</code>.</p>
 
 <h4>Example requests</h4>
 <pre>
 curl --json "$(cat data3.json)" http://127.0.0.1:5000/rand | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/topdown | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/avg | jq
+curl --json "$(cat data12.json)" http://127.0.0.1:5000/avg-all | jq
 </pre>
 
 <h2>Development</h2>
