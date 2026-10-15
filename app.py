@@ -461,9 +461,9 @@ max {MAX_COMBINATIONS_LIMIT}; max {MAX_AVG_PLAYERS} players)</li>
 <p>Every endpoint also accepts <code>facilitator</code> (the person running the
 draw, who is in team A if playing) and <code>played</code> (splits already
 played, oldest first: a draw avoids them while another exists, the last one
-keeps its sides, and once all are played it picks randomly, but not the last). Responses of the draw endpoints
-say what happened in <code>method</code>, <code>already_played</code> and
-<code>repeat_avoided</code>. See the README for the details.</p>
+keeps its sides, and once all are played it picks randomly, but not the last).
+Responses of the draw endpoints say what happened in <code>method</code>,
+<code>already_played</code> and <code>repeat_avoided</code>. See the README for the details.</p>
 
 <h4>Example requests</h4>
 <pre>
