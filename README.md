@@ -39,16 +39,18 @@ teams; with zero females the flag changes nothing.</p>
 fields are optional and work with every endpoint (<code>/rand</code>,
 <code>/topdown</code>, <code>/avg</code> and <code>/avg-all</code>):</p>
 <ul>
-<li><code>"team_a_player": "id"</code> &mdash; this player (if playing) is in
-<code>team_a</code>. Without it the team holding the smallest player id is A,
-so the labels never depend on the order the players were sent in.</li>
+<li><code>"facilitator": "id"</code> &mdash; the person running the draw. If they
+are playing they are in <code>team_a</code>, so they always know which side is
+theirs. Without it (or if they are not playing) the team holding the smallest
+player id is A, so the labels never depend on the order the players were sent
+in.</li>
 <li><code>"played": [{"team_a": [ids], "team_b": [ids]}, ...]</code> &mdash; splits
 already played, <strong>oldest first</strong>. <code>/avg</code>,
 <code>/topdown</code> and <code>/rand</code> avoid them while any other split
 exists (see below) and <code>/avg-all</code> flags them. Which side is
 called A does not matter for that. It matters for the <em>last</em> entry, the
 split played last: if a result is that same split it keeps those sides,
-whatever <code>team_a_player</code> says, so a continued match never swaps
+whatever <code>facilitator</code> says, so a continued match never swaps
 teams.</li>
 </ul>
 <p>Draw responses (<code>/rand</code>, <code>/topdown</code>, <code>/avg</code>)
@@ -79,7 +81,7 @@ is answered with <strong>HTTP 400</strong> and a JSON
 <li><code>avg</code> and <code>combinations</code> try every combination, so
 they accept at most <strong>24 players</strong> (400 above that);
 rand/topdown have no cap.</li>
-<li><code>team_a_player</code>, <code>played</code> and
+<li><code>facilitator</code>, <code>played</code> and
 <code>limit</code> are validated too (400 if malformed).</li>
 <li>Request bodies over 1&nbsp;MB are rejected with 413.</li>
 <li>Successful responses are <code>application/json</code>, HTTP 200.</li>

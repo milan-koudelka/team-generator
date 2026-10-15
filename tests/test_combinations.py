@@ -120,7 +120,7 @@ class TestCombinations:
         assert [c["already_played"] for c in out["combinations"]] == [True, False, False]
 
     def test_puts_the_requested_player_in_team_a_of_every_combination(self, client):
-        out = post(client, "/avg-all", make_players(6), team_a_player="p4", limit=50)
+        out = post(client, "/avg-all", make_players(6), facilitator="p4", limit=50)
 
         assert all("p4" in c["team_a"] for c in out["combinations"])
 
@@ -141,7 +141,7 @@ class TestTeamA:
     @pytest.mark.parametrize("endpoint", ["/rand", "/topdown", "/avg"])
     def test_the_requested_player_is_in_team_a(self, client, endpoint):
         for player in ("p0", "p1", "p2", "p3"):
-            out = post(client, endpoint, make_players(4), team_a_player=player)
+            out = post(client, endpoint, make_players(4), facilitator=player)
             assert player in out["team_a"]
 
     @pytest.mark.parametrize("endpoint", ["/topdown", "/avg"])
@@ -152,7 +152,7 @@ class TestTeamA:
             assert "p0" in out["team_a"]
 
     def test_a_player_who_is_not_playing_changes_nothing(self, client):
-        out = post(client, "/avg", make_players(4), team_a_player="somebody-else")
+        out = post(client, "/avg", make_players(4), facilitator="somebody-else")
 
         assert "p0" in out["team_a"]
 
@@ -164,20 +164,20 @@ class TestTeamA:
             client,
             "/avg-all",
             make_players(4),
-            team_a_player="p0",  # would be in A otherwise
+            facilitator="p0",  # would be in A otherwise
             played=played,
         )
 
         best, *others = out["combinations"]
         assert key(best) == BEST and best["already_played"] is True
         assert set(best["team_a"]) == {"p1", "p2"}
-        # Any other split is oriented by team_a_player as usual.
+        # Any other split is oriented by facilitator as usual.
         assert all("p0" in c["team_a"] for c in others)
 
     def test_only_the_last_entry_of_played_decides_the_sides(self, client):
         played = [split({"p1", "p2"}, {"p0", "p3"}), split({"p0", "p3"}, {"p1", "p2"})]
 
-        out = post(client, "/avg-all", make_players(4), team_a_player="p1", played=played)
+        out = post(client, "/avg-all", make_players(4), facilitator="p1", played=played)
 
         assert set(out["combinations"][0]["team_a"]) == {"p0", "p3"}
 
@@ -187,7 +187,7 @@ class TestTeamA:
             client,
             "/avg",
             make_players(2),
-            team_a_player="p0",
+            facilitator="p0",
             played=[split({"p1"}, {"p0"})],
         )
 
@@ -198,7 +198,7 @@ class TestTeamA:
             client,
             "/avg",
             make_players(4),
-            team_a_player="p3",
+            facilitator="p3",
             played=[split({"p0", "p2"}, {"p1", "p3"})],
         )
 
@@ -323,7 +323,7 @@ class TestValidation:
     @pytest.mark.parametrize(
         "extra",
         [
-            {"team_a_player": 5},
+            {"facilitator": 5},
             {"played": [{"team_a": ["p0"]}]},
             {"played": [{"team_a": ["p0"], "team_b": [1]}]},
             {"played": "nope"},
@@ -336,8 +336,8 @@ class TestValidation:
 
         assert "error" in out
 
-    def test_a_null_team_a_player_is_fine(self, client):
-        post(client, "/avg", make_players(4), team_a_player=None)
+    def test_a_null_facilitator_is_fine(self, client):
+        post(client, "/avg", make_players(4), facilitator=None)
 
     def test_played_splits_with_unknown_players_are_simply_ignored(self, client):
         out = post(client, "/avg", make_players(4), played=[split({"x"}, {"y"})])

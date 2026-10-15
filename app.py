@@ -93,7 +93,8 @@ def _parse_request():
 class Hints:
     """Optional context a caller can send with any request.
 
-    team_a_player: this player (if playing) is shown in team A.
+    facilitator:   the person running the draw. If they are playing they are
+                   shown in team A, so they always know which side is theirs.
     played:        splits already played, oldest first; the draw avoids them
                    while another exists. The last one is the split played
                    last: if the result is that split it keeps its sides, so a
@@ -102,7 +103,7 @@ class Hints:
                    stateless, the caller owns the history.
     """
 
-    team_a_player: str | None = None
+    facilitator: str | None = None
     played: tuple[tuple[frozenset, frozenset], ...] = ()
 
     @cached_property
@@ -133,19 +134,19 @@ def _split_key(team_a, team_b):
 
 
 def _parse_hints():
-    """Validate the optional team_a_player / played fields of the (already
+    """Validate the optional facilitator / played fields of the (already
     validated) request body."""
     data = request.get_json(silent=True)
 
-    team_a_player = data.get("team_a_player")
-    if team_a_player is not None and not isinstance(team_a_player, str):
-        raise ValidationError("'team_a_player' must be a player id")
+    facilitator = data.get("facilitator")
+    if facilitator is not None and not isinstance(facilitator, str):
+        raise ValidationError("'facilitator' must be a player id")
 
     played = data.get("played", [])
     if not isinstance(played, list):
         raise ValidationError("'played' must be a list of splits")
     return Hints(
-        team_a_player=team_a_player,
+        facilitator=facilitator,
         played=tuple(_parse_split(item, "played[]") for item in played),
     )
 
@@ -155,7 +156,7 @@ def _orient(team_a, team_b, hints):
 
     1. the same split as the one played last (the end of hints.played) keeps
        that split's sides;
-    2. otherwise the side with hints.team_a_player is A;
+    2. otherwise the side with the facilitator is A;
     3. otherwise the side holding the smallest player id is A, so the result
        does not depend on the order players were sent in.
     """
@@ -166,9 +167,9 @@ def _orient(team_a, team_b, hints):
             return list(team_a), list(team_b)
         if a_set == last_b and b_set == last_a:
             return list(team_b), list(team_a)
-    if hints.team_a_player in b_set:
+    if hints.facilitator in b_set:
         return list(team_b), list(team_a)
-    if hints.team_a_player in a_set:
+    if hints.facilitator in a_set:
         return list(team_a), list(team_b)
     if min(a_set | b_set) in a_set:
         return list(team_a), list(team_b)
@@ -457,10 +458,10 @@ max {MAX_COMBINATIONS_LIMIT}; max {MAX_AVG_PLAYERS} players)</li>
 </ul>
 
 <h3>Optional context</h3>
-<p>Every endpoint also accepts <code>team_a_player</code> (this player is in
-team A) and <code>played</code> (splits already played, oldest first: a draw
-avoids them while another exists, the last one keeps its sides, and once all
-are played it picks randomly, but not the last). Responses of the draw endpoints
+<p>Every endpoint also accepts <code>facilitator</code> (the person running the
+draw, who is in team A if playing) and <code>played</code> (splits already
+played, oldest first: a draw avoids them while another exists, the last one
+keeps its sides, and once all are played it picks randomly, but not the last). Responses of the draw endpoints
 say what happened in <code>method</code>, <code>already_played</code> and
 <code>repeat_avoided</code>. See the README for the details.</p>
 
