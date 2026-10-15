@@ -1,5 +1,8 @@
 # A Python program to split a list of players into two balanced teams.
 import random
+from dataclasses import dataclass
+from functools import cached_property
+from heapq import nsmallest
 from itertools import combinations
 
 from flask import Flask, jsonify, request
@@ -14,6 +17,14 @@ app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 # (~2.7M splits, a few seconds) is a sane ceiling; 30+ would run for minutes
 # and wedge the worker.
 MAX_AVG_PLAYERS = 24
+
+# /rand draws again this many times before falling back when it lands on a
+# split that was already played.
+RAND_REDRAWS = 30
+
+# /combinations returns the best `limit` splits.
+DEFAULT_COMBINATIONS_LIMIT = 20
+MAX_COMBINATIONS_LIMIT = 200
 
 # --- Skill model ------------------------------------------------------------
 # We use OpenSkill (PlackettLuce). A player carries mu and sigma (the receiving
@@ -78,6 +89,92 @@ def _parse_request():
     return players, balance_females
 
 
+@dataclass(frozen=True)
+class Hints:
+    """Optional context a caller can send with any request.
+
+    team_a_player: this player (if playing) is shown in team A.
+    played:        splits already played, oldest first; the draw avoids them
+                   while another exists. The last one is the split played
+                   last: if the result is that split it keeps its sides, so a
+                   continued match never swaps teams, and once every split has
+                   been played the random pick avoids it. The service is
+                   stateless, the caller owns the history.
+    """
+
+    team_a_player: str | None = None
+    played: tuple[tuple[frozenset, frozenset], ...] = ()
+
+    @cached_property
+    def played_keys(self):
+        return frozenset(_split_key(team_a, team_b) for team_a, team_b in self.played)
+
+    @property
+    def last_split(self):
+        return self.played[-1] if self.played else None
+
+
+def _parse_split(value, name):
+    """{"team_a": [ids], "team_b": [ids]} -> (frozenset, frozenset)."""
+    if not isinstance(value, dict):
+        raise ValidationError(f"'{name}' must be an object with 'team_a' and 'team_b'")
+    sides = []
+    for side in ("team_a", "team_b"):
+        ids = value.get(side)
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise ValidationError(f"'{name}.{side}' must be a list of player ids")
+        sides.append(frozenset(ids))
+    return tuple(sides)
+
+
+def _split_key(team_a, team_b):
+    """Identity of a split regardless of which side is called A."""
+    return frozenset((frozenset(team_a), frozenset(team_b)))
+
+
+def _parse_hints():
+    """Validate the optional team_a_player / played fields of the (already
+    validated) request body."""
+    data = request.get_json(silent=True)
+
+    team_a_player = data.get("team_a_player")
+    if team_a_player is not None and not isinstance(team_a_player, str):
+        raise ValidationError("'team_a_player' must be a player id")
+
+    played = data.get("played", [])
+    if not isinstance(played, list):
+        raise ValidationError("'played' must be a list of splits")
+    return Hints(
+        team_a_player=team_a_player,
+        played=tuple(_parse_split(item, "played[]") for item in played),
+    )
+
+
+def _orient(team_a, team_b, hints):
+    """Decide which side is shown as team A, so the labels never jump around:
+
+    1. the same split as the one played last (the end of hints.played) keeps
+       that split's sides;
+    2. otherwise the side with hints.team_a_player is A;
+    3. otherwise the side holding the smallest player id is A, so the result
+       does not depend on the order players were sent in.
+    """
+    a_set, b_set = set(team_a), set(team_b)
+    if hints.last_split is not None:
+        last_a, last_b = hints.last_split
+        if a_set == last_a and b_set == last_b:
+            return list(team_a), list(team_b)
+        if a_set == last_b and b_set == last_a:
+            return list(team_b), list(team_a)
+    if hints.team_a_player in b_set:
+        return list(team_b), list(team_a)
+    if hints.team_a_player in a_set:
+        return list(team_a), list(team_b)
+    if min(a_set | b_set) in a_set:
+        return list(team_a), list(team_b)
+    return list(team_b), list(team_a)
+
+
 def _ordinal(player):
     """OpenSkill single-number skill estimate (mu - 3*sigma) used for ranking
     and balancing. Conservative: high uncertainty lowers the estimate."""
@@ -138,6 +235,183 @@ def _team_stats(team_ids, players, ordinal):
     }
 
 
+def _split_stats(team_a, team_b, players):
+    """Figures describing a split, the same ones /avg reports."""
+    ordinal = {pid: _ordinal(players[pid]) for pid in [*team_a, *team_b]}
+    stats_a = _team_stats(team_a, players, ordinal)
+    stats_b = _team_stats(team_b, players, ordinal)
+    return {
+        "team_a_players": stats_a["players"],
+        "team_a_ordinal": stats_a["ordinal"],
+        "avg_player_team_a_ordinal": stats_a["avg_ordinal"],
+        "team_b_players": stats_b["players"],
+        "team_b_ordinal": stats_b["ordinal"],
+        "avg_player_team_b_ordinal": stats_b["avg_ordinal"],
+        "avg_player_ordinal_difference": abs(stats_a["avg_ordinal"] - stats_b["avg_ordinal"]),
+        "team_a_females": stats_a["females"],
+        "team_b_females": stats_b["females"],
+        "team_a_males": stats_a["males"],
+        "team_b_males": stats_b["males"],
+        "female_difference": abs(stats_a["females"] - stats_b["females"]),
+        "total_players": len(team_a) + len(team_b),
+    }
+
+
+def _candidate_teams(n):
+    """Every split of players 0..n-1 exactly once, as the index tuple of team A
+    (the smaller side; with an even count the side holding player 0, since
+    otherwise each split would be seen twice, as A/B and as B/A)."""
+    size = n // 2
+    if n % 2 == 0:
+        return ((0,) + tail for tail in combinations(range(1, n), size - 1))
+    return combinations(range(n), size)
+
+
+def _check_enumerable(players):
+    if len(players) > MAX_AVG_PLAYERS:
+        raise ValidationError(
+            f"This needs every combination, so it supports at most {MAX_AVG_PLAYERS} players "
+            f"({len(players)} given)"
+        )
+
+
+def _ranked_splits(players, balance_females, limit, shuffle_ties=False):
+    """The `limit` most balanced splits, smallest difference of the teams'
+    average ordinal first, as [(team_a_ids, team_b_ids)], plus how many splits
+    there are in all.
+
+    With balance_females a split whose female counts differ by 2 or more is
+    not a candidate. Equal differences are common (new groups rate everyone
+    the same): they come out in a stable order, or random with shuffle_ties.
+    Players are taken in sorted id order, so the order they were sent in never
+    matters."""
+    ids = sorted(players)
+    n = len(ids)
+    ordinal = [_ordinal(players[pid]) for pid in ids]
+    females = [1 - players[pid]["male"] for pid in ids]
+    total_ordinal, total_females = sum(ordinal), sum(females)
+    size = n // 2
+    rng = random.Random() if shuffle_ties else None  # nosemgrep - ignore B311
+    seen = 0
+
+    def scored():
+        nonlocal seen
+        for team_a in _candidate_teams(n):
+            if balance_females:
+                a_females = sum(females[i] for i in team_a)
+                # one team may have at most one female more (odd female counts);
+                # with zero or one female this filters nothing
+                if abs(a_females - (total_females - a_females)) >= 2:
+                    continue
+            a_total = sum(ordinal[i] for i in team_a)
+            difference = abs(a_total / size - (total_ordinal - a_total) / (n - size))
+            seen += 1
+            yield (round(difference, 9), rng.random() if rng else seen, team_a)
+
+    ranked = []
+    for _, _, team_a in nsmallest(limit, scored()):
+        in_a = set(team_a)
+        ranked.append(([ids[i] for i in team_a], [ids[i] for i in range(n) if i not in in_a]))
+    return ranked, seen
+
+
+def _random_split(players, balance_females, avoid=frozenset()):
+    """One split chosen uniformly at random from all that are allowed. Splits
+    in `avoid` are skipped unless nothing else exists."""
+    ids = sorted(players)
+    n = len(ids)
+    index = {pid: i for i, pid in enumerate(ids)}
+    females = [1 - players[pid]["male"] for pid in ids]
+    total_females = sum(females)
+    # A candidate (sorted index tuple) is one side of a split, so a split to
+    # avoid is recognised by either of its sides.
+    avoided_sides = {
+        tuple(sorted(index[pid] for pid in side))
+        for key in avoid
+        for side in key
+        if all(pid in index for pid in side)
+    }
+
+    for skip in (avoided_sides, set()):
+        chosen, seen = None, 0
+        for team_a in _candidate_teams(n):
+            if team_a in skip:
+                continue
+            if balance_females:
+                a_females = sum(females[i] for i in team_a)
+                if abs(a_females - (total_females - a_females)) >= 2:
+                    continue
+            seen += 1
+            # reservoir sampling: every candidate ends up chosen with equal odds
+            if random.random() * seen < 1:  # nosemgrep - ignore B311
+                chosen = team_a
+        if chosen is not None:
+            in_a = set(chosen)
+            return [ids[i] for i in chosen], [ids[i] for i in range(n) if i not in in_a]
+    raise ValidationError("No split satisfies the requested constraints")
+
+
+def _best_unplayed(players, balance_females, hints, shuffle_ties):
+    """(team_a, team_b, exhausted, skipped): the most balanced split not played
+    yet, where `skipped` says it is not the most balanced one overall because
+    that was played. When every split has been played: a random one (not the
+    one played last, if any other) with exhausted true. Only for at most
+    MAX_AVG_PLAYERS."""
+    ranked, _ = _ranked_splits(
+        players, balance_females, limit=len(hints.played_keys) + 1, shuffle_ties=shuffle_ties
+    )
+    for position, (team_a, team_b) in enumerate(ranked):
+        if _split_key(team_a, team_b) not in hints.played_keys:
+            return team_a, team_b, False, position > 0
+    avoid = {_split_key(*hints.last_split)} if hints.last_split else set()
+    team_a, team_b = _random_split(players, balance_females, avoid)
+    return team_a, team_b, True, False
+
+
+def _respond(method, team_a, team_b, players, hints, *, with_stats, repeat_avoided=False):
+    """The response of a draw: the teams, which method produced them, and what
+    happened about splits already played."""
+    team_a, team_b = _orient(team_a, team_b, hints)
+    output = _teams_dict(team_a, team_b, players)
+    output["method"] = method
+    output["already_played"] = _split_key(team_a, team_b) in hints.played_keys
+    output["repeat_avoided"] = repeat_avoided
+    if with_stats:
+        output.update(_split_stats(team_a, team_b, players))
+    return jsonify(output)
+
+
+def _avoid_played(method, team_a, team_b, players, balance_females, hints, redraw=None):
+    """Replace a draw that landed on an already played split, if possible.
+
+    /rand first draws again (`redraw` gives another split); anything still
+    played is replaced by the most balanced unplayed split, which is reported
+    as method 'avg'. If every split was played, a random one is chosen and
+    reported as 'rand' with already_played true. Past MAX_AVG_PLAYERS the
+    splits cannot be enumerated, so the played one is returned as it is."""
+    if _split_key(team_a, team_b) not in hints.played_keys:
+        return _respond(method, team_a, team_b, players, hints, with_stats=method == "avg")
+    if redraw:
+        for _ in range(RAND_REDRAWS):
+            team_a, team_b = redraw()
+            if _split_key(team_a, team_b) not in hints.played_keys:
+                return _respond(method, team_a, team_b, players, hints, with_stats=False)
+    if len(players) > MAX_AVG_PLAYERS:
+        return _respond(method, team_a, team_b, players, hints, with_stats=False)
+    team_a, team_b, exhausted, _ = _best_unplayed(
+        players, balance_females, hints, shuffle_ties=True
+    )
+    return _respond(
+        "rand" if exhausted else "avg",
+        team_a,
+        team_b,
+        players,
+        hints,
+        with_stats=True,
+        repeat_avoided=not exhausted,
+    )
+
+
 @app.route("/")
 def landingpage():
     return f"""
@@ -177,22 +451,30 @@ is disabled by default.</p>
 <li>rand - split players into teams randomly</li>
 <li>topdown - snake draft by OpenSkill ordinal</li>
 <li>avg - balance the two teams by average OpenSkill ordinal (max {MAX_AVG_PLAYERS} players)</li>
+<li>combinations - every way to split the players, most balanced first, best
+<code>limit</code> of them (default {DEFAULT_COMBINATIONS_LIMIT}, max {MAX_COMBINATIONS_LIMIT};
+max {MAX_AVG_PLAYERS} players)</li>
 </ul>
+
+<h3>Optional context</h3>
+<p>Every endpoint also accepts <code>team_a_player</code> (this player is in
+team A) and <code>played</code> (splits already played, oldest first: a draw
+avoids them while another exists, the last one keeps its sides, and once all
+are played it picks randomly, but not the last). Responses of the draw endpoints
+say what happened in <code>method</code>, <code>already_played</code> and
+<code>repeat_avoided</code>. See the README for the details.</p>
 
 <h4>Example requests</h4>
 <pre>
 curl --json "$(cat data3.json)" http://127.0.0.1:5000/rand | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/topdown | jq
 curl --json "$(cat data12.json)" http://127.0.0.1:5000/avg | jq
+curl --json "$(cat data12.json)" http://127.0.0.1:5000/combinations | jq
 </pre>
 """
 
 
-@app.post("/rand")
-# split the players into two random teams
-def rand():
-    players, balance_females = _parse_request()
-
+def _random_teams(players, balance_females):
     a, b = [], []
     if balance_females:
         # deal each gender as a block so female (and total) counts stay balanced
@@ -205,8 +487,25 @@ def rand():
         ids = list(players.keys())
         random.shuffle(ids)  # nosemgrep - ignore B311
         _assign_to_smaller(ids, a, b, tie_random=True)
+    return a, b
 
-    return jsonify(_teams_dict(a, b, players))
+
+@app.post("/rand")
+# split the players into two random teams
+def rand():
+    players, balance_females = _parse_request()
+    hints = _parse_hints()
+
+    a, b = _random_teams(players, balance_females)
+    return _avoid_played(
+        "rand",
+        a,
+        b,
+        players,
+        balance_females,
+        hints,
+        redraw=lambda: _random_teams(players, balance_females),
+    )
 
 
 @app.post("/topdown")
@@ -214,6 +513,7 @@ def rand():
 # next to team B; from the second half the weakest goes to team A, next to B.
 def topdown():
     players, balance_females = _parse_request()
+    hints = _parse_hints()
 
     a, b = [], []
     if balance_females:
@@ -236,80 +536,58 @@ def topdown():
             else:
                 b.append(pid)
 
-    return jsonify(_teams_dict(a, b, players))
+    return _avoid_played("topdown", a, b, players, balance_females, hints)
 
 
 @app.post("/avg")
 # split into two teams balanced by average OpenSkill ordinal
 def avg():
     players, balance_females = _parse_request()
-    if len(players) > MAX_AVG_PLAYERS:
-        raise ValidationError(
-            f"'avg' supports at most {MAX_AVG_PLAYERS} players ({len(players)} given)"
-        )
-    all_ids = list(players.keys())
-    all_players_set = set(all_ids)
-    ordinal = {pid: _ordinal(p) for pid, p in players.items()}
-    team_size = len(all_ids) // 2
+    hints = _parse_hints()
+    _check_enumerable(players)
 
-    # With an even player count every split would be enumerated twice (A/B and
-    # B/A swapped) — pinning one player into team A halves the work.
-    if len(all_ids) % 2 == 0:
-        pinned, rest = all_ids[0], all_ids[1:]
-        candidates = ((pinned,) + tail for tail in combinations(rest, team_size - 1))
-    else:
-        candidates = combinations(all_ids, team_size)
-
-    best_team_a = None
-    best_team_b = None
-    closest_difference = None
-    # try every way to pick team A; the rest is team B
-    for team_a in candidates:
-        team_a_set = set(team_a)
-        team_b_set = all_players_set - team_a_set
-
-        if balance_females:
-            team_a_females = sum((1 - players[x]["male"]) for x in team_a_set)
-            team_b_females = sum((1 - players[x]["male"]) for x in team_b_set)
-            # one team may have at most one female more (odd female counts);
-            # with zero or one female this filters nothing
-            if abs(team_a_females - team_b_females) >= 2:
-                continue
-
-        team_a_total = sum(ordinal[x] for x in team_a_set)
-        team_b_total = sum(ordinal[x] for x in team_b_set)
-        avg_difference = abs(team_a_total / len(team_a_set) - team_b_total / len(team_b_set))
-        if closest_difference is None or avg_difference < closest_difference:
-            closest_difference = avg_difference
-            best_team_a = team_a_set
-            best_team_b = team_b_set
-
-    if best_team_a is None:
-        # unreachable with validated input (a female-balanced split always
-        # exists), kept as a guard against future filters
-        raise ValidationError("No split satisfies the requested constraints")
-
-    stats_a = _team_stats(best_team_a, players, ordinal)
-    stats_b = _team_stats(best_team_b, players, ordinal)
-    output = _teams_dict(best_team_a, best_team_b, players)
-    output.update(
-        {
-            "team_a_players": stats_a["players"],
-            "team_a_ordinal": stats_a["ordinal"],
-            "avg_player_team_a_ordinal": stats_a["avg_ordinal"],
-            "team_b_players": stats_b["players"],
-            "team_b_ordinal": stats_b["ordinal"],
-            "avg_player_team_b_ordinal": stats_b["avg_ordinal"],
-            "avg_player_ordinal_difference": abs(stats_a["avg_ordinal"] - stats_b["avg_ordinal"]),
-            "team_a_females": stats_a["females"],
-            "team_b_females": stats_b["females"],
-            "team_a_males": stats_a["males"],
-            "team_b_males": stats_b["males"],
-            "female_difference": abs(stats_a["females"] - stats_b["females"]),
-            "total_players": len(players),
-        }
+    # Best split first; with a played history, the best one not played yet.
+    team_a, team_b, exhausted, skipped = _best_unplayed(
+        players, balance_females, hints, shuffle_ties=False
     )
-    return jsonify(output)
+    return _respond(
+        "rand" if exhausted else "avg",
+        team_a,
+        team_b,
+        players,
+        hints,
+        with_stats=True,
+        repeat_avoided=skipped,
+    )
+
+
+@app.post("/combinations")
+# every way to split the players, most balanced first
+def all_combinations():
+    players, balance_females = _parse_request()
+    hints = _parse_hints()
+    _check_enumerable(players)
+
+    limit = request.get_json(silent=True).get("limit", DEFAULT_COMBINATIONS_LIMIT)
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or not (1 <= limit <= MAX_COMBINATIONS_LIMIT)
+    ):
+        raise ValidationError(f"'limit' must be an integer from 1 to {MAX_COMBINATIONS_LIMIT}")
+
+    ranked, total = _ranked_splits(players, balance_females, limit)
+    combos = []
+    for team_a, team_b in ranked:
+        team_a, team_b = _orient(team_a, team_b, hints)
+        combos.append(
+            {
+                **_teams_dict(team_a, team_b, players),
+                **_split_stats(team_a, team_b, players),
+                "already_played": _split_key(team_a, team_b) in hints.played_keys,
+            }
+        )
+    return jsonify({"total": total, "combinations": combos})
 
 
 if __name__ == "__main__":
