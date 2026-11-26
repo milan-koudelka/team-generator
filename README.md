@@ -10,7 +10,10 @@ estimate, <code>mu - 3*sigma</code> — which is what we surface instead of raw
 <code>mu</code>.</p>
 
 <p>To use the app you need to start a Docker container.</p>
-<pre>docker run -d -p 5000:5000 docker.io/koudisek/teamgenerator</pre>
+<pre>docker run -d -p 5000:5000 ghcr.io/milan-koudelka/teamgenerator</pre>
+<p>Tags: <code>latest</code> (newest <code>master</code>) and the full commit
+SHA of every build, for pinning a version. The old
+<code>docker.io/koudisek/teamgenerator</code> image is no longer updated.</p>
 
 <h2>REST API</h2>
 Send a request with the list of players and get back the two teams as JSON.
@@ -141,7 +144,10 @@ venv/bin/pytest                                           # unit + integration t
 </pre>
 <p>CI (GitHub Actions, <code>.github/workflows/ci.yml</code>) runs ruff and
 pytest on every push and pull request; a push to <code>master</code>
-additionally builds and publishes the multi-arch (amd64+arm64) Docker image to
-Docker Hub. Publishing needs the repo secrets
-<code>DOCKERHUB_USERNAME</code> and <code>DOCKERHUB_TOKEN</code>. The
+additionally builds and publishes the multi-arch (amd64+arm64) image to the
+GitHub Container Registry as <code>ghcr.io/milan-koudelka/teamgenerator</code>
+(<code>latest</code> and the commit SHA). Publishing uses the workflow's
+<code>GITHUB_TOKEN</code>, no secrets are needed. The image is never built or
+pushed by hand. The package is public like this repository; if GitHub created
+it as private, change it under Package settings, Change visibility. The
 container runs gunicorn as an unprivileged user.</p>
